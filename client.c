@@ -263,7 +263,7 @@ int main(int argc, char* argv[])
     int input;
     int len = 0;
     int buf_len = MB;
-    FILE* pFILE = fopen("50M.txt", "r");
+    FILE* pFILE = fopen("1K.txt", "r");
     if(pFILE == NULL)
         printf("fuck, cannot open the file\n");
     /* get character and store to string */
