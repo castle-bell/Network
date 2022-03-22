@@ -194,13 +194,12 @@ int main(int argc, char* argv[])
         return 0;
     }
     /* Compare the parameter with right format */
-    /* 나중에 2,4 비교하는 것도 넣기 */
-    
     if(strncmp("./client",argv[0],max(strlen(argv[0]),8)))
     {
         fprintf(stderr, "File name is wrong, Please retry\n");
         return 0;
     }
+
     if(strncmp("-h",argv[1],max(strlen(argv[1]),2)))
     {
         fprintf(stderr, "Option is wrong, Please retry\n");
@@ -252,10 +251,9 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Connection failed\n");
         return 0;
     }
-    printf("Server IP:%s\n",argv[2]);
 
     /* Connection Success */
-    printf("connection success\n");
+
     /* Allocate the string size of 1MB, if not enough, realloc */
     
     char *string;
@@ -263,11 +261,9 @@ int main(int argc, char* argv[])
     int input;
     int len = 0;
     int buf_len = MB;
-    FILE* pFILE = fopen("1K.txt", "r");
-    if(pFILE == NULL)
-        printf("fuck, cannot open the file\n");
+
     /* get character and store to string */
-    while((input = fgetc(pFILE)) != EOF)
+    while((input = fgetc(stdin)) != EOF)
     {
         len++;
         if(len >= buf_len)
@@ -279,7 +275,6 @@ int main(int argc, char* argv[])
     }
     /* this string is not finished to null character, I'll put the null character when I create the protocol */
     free(res);
-    fclose(pFILE);
     /* Make message with the format of protocol 나중에 protocol 파일로 옮길듯*/
     /* 0~len-1 까지의 string을 send */
     int start = 0;
@@ -325,11 +320,9 @@ int main(int argc, char* argv[])
     }
     store[store_occupied] = '\0';
     store_occupied++;
-    printf("%s\n",store);
-    printf("store_size: %d\n",store_size);
-    printf("store_occupied: %d\n",store_occupied-1);
-    printf("store last word: %c\n",store[store_occupied-2]);
+    printf("%s",store);
+    free(string);
+    free(store);
     close(client_server);
-    fflush(stdout);
     return 0;
 }

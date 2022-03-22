@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <netdb.h>
 
+#define MB 1000*1000
+
 struct protocol
     {
         uint16_t op;
@@ -17,6 +19,33 @@ struct protocol
         uint32_t length;
         char message[];
     };
+
+int max(int a, int b)
+{
+    return (a >= b) ? a : b;
+}
+
+bool check_argv(int argc, char **argv)
+{
+    if(argc != 3)
+    {
+        fprintf(stderr, "Given command line is wrong, Please retry\n");
+        return false;
+    }
+    /* Compare the parameter with right format */
+    
+    if(strncmp("./server",argv[0],max(strlen(argv[0]),8)))
+    {
+        fprintf(stderr, "File name is wrong, Please retry\n");
+        return false;
+    }
+    if(strncmp("-p",argv[1],max(strlen(argv[1]),2)))
+    {
+        fprintf(stderr, "Option is wrong, Please retry\n");
+        return false;
+    }
+    return true;
+}
 
 void init_protocol(struct protocol* protocol, uint16_t op, uint16_t shift, uint32_t length)
 {
@@ -48,7 +77,8 @@ int receive_all(int fd, char* buffer, size_t length)
     while(length>0)
     {
         int rcv = recv(fd,buffer,length,0);
-        if(rcv <= 0) return false;
+        if(rcv < 0) return -2;
+        if(rcv == 0) return -1;
         buffer += rcv;
         length -= rcv;
         receive += rcv;
@@ -64,7 +94,19 @@ char* receive_protocol(int fd, int *received)
     int message_length = 0;
     struct protocol* header = (struct protocol*)calloc(8,sizeof(char));
 
-    receive_all(fd,(char *)header,8);
+    int check;
+    if((check = receive_all(fd,(char *)header,8)) == -1)
+    {
+        /* Connection finished */
+        free(header);
+        return NULL;
+    }
+    if(check == -2)
+    {
+        /* Recv failed */
+        free(header);
+        return NULL;
+    }
     total_length = ntohl(header->length);
     message_length = total_length-8;
 
@@ -78,10 +120,6 @@ char* receive_protocol(int fd, int *received)
     receive_all(fd,&protocol[8],message_length);
     *received = total_length;
     free(header);
-    if(protocol[total_length-1] != '\0')
-    {
-        return NULL;
-    }
     return protocol;
 }
 
@@ -91,14 +129,15 @@ bool check_protocol(struct protocol *protocol)
     uint16_t op = protocol->op;
     uint16_t shift = protocol->shift;
     uint32_t length = ntohl(protocol->length);
-
     /* check op */
     if(op != 0 && op != 1)
         return false;
     /* shift check */
     if((shift<0) || (shift > 65536))
         return false;
-    /* length check(pass) */
+    /* length check(10MB) */
+    if(length > 10*MB)
+        return false;
     /* null character check */
     if(protocol->message[length-9] != '\0')
         return false;
@@ -132,27 +171,20 @@ char low_caesar(char letter, uint16_t n, uint16_t option)
 
 int main(int argc, char* argv[])
 {
+    /* check the command line */
+    if(check_argv(argc,argv) == false)
+    {
+        return 0;
+    }
+    
     char *port = argv[2];
 
     char hostbuffer[256];
-    char *IPbuffer;
-    struct hostent *host_entry;
     int hostname;
   
     // To retrieve hostname
     hostname = gethostname(hostbuffer, sizeof(hostbuffer));
   
-    // To retrieve host information
-    host_entry = gethostbyname(hostbuffer);
-  
-    // To convert an Internet network
-    // address into ASCII string
-    IPbuffer = inet_ntoa(*((struct in_addr*)
-                           host_entry->h_addr_list[0]));
-  
-    printf("Hostname: %s\n", hostbuffer);
-    printf("Host IP: %s", IPbuffer);
-
     /* Cite the beej's */
     struct addrinfo hints, *res, *p;
     int status;
@@ -191,45 +223,54 @@ int main(int argc, char* argv[])
     addr_size = sizeof(client_addr);
     freeaddrinfo(res);
 
-
+    pid_t pid;
+    
     int new_fd;
     while(1)
     {
         new_fd = accept(fd,(struct sockaddr *)&client_addr,&addr_size);
         if(new_fd == -1)
             continue;
-        printf("success\n");
-
-        /* connection success */
-
-        /* read the total amount of protocol */
-        int protocol_size = 0;
-        struct protocol *protocol = (struct protocol *)receive_protocol(new_fd,&protocol_size);
-        if(protocol == NULL)
-        {
-            fprintf(stderr, "receive failed or client fault\n");
-        }
-        printf("%s\n",protocol->message);
-        printf("%d\n",protocol_size);
-
-        if(check_protocol(protocol) == false)
-        {
-            /* reject */
-        }
-
-        uint16_t op = protocol->op;
-        uint16_t shift = protocol->shift;
-        /* lowering alphabet and caesar cipher */
-        for(int i=0; i<protocol_size-8; i++)
-        {
-            char letter = protocol->message[i];
-            protocol->message[i] = low_caesar(letter,shift,op);
-        }
-        send_all(new_fd,protocol,protocol_size);
-
+        pid = fork();
+        if(pid == 0)
+            break;
+        if(pid < 0)
+            fprintf(stderr,"Fork failed\n");
     }
+    
+    /* connection success */
+    if(pid == 0)
+    {
+        while(1)
+        {
+            /* read the total amount of protocol */
+            int protocol_size = 0;
+            struct protocol *protocol = (struct protocol *)receive_protocol(new_fd,&protocol_size);
+            if(protocol == NULL)
+            {
+                /* Connection finished */
+                close(new_fd);
+                break;
+            }
 
-    /* Connection Success */
-
+            if(check_protocol(protocol) == false)
+            {
+                /* reject */
+                close(new_fd);
+                break;
+            }
+            uint16_t op = protocol->op;
+            uint16_t shift = protocol->shift;
+            /* lowering alphabet and caesar cipher */
+            for(int i=0; i<protocol_size-8; i++)
+            {
+                char letter = protocol->message[i];
+                protocol->message[i] = low_caesar(letter,shift,op);
+            }
+            send_all(new_fd,(char *)protocol,protocol_size);
+            free(protocol);
+        }
+        exit(0);
+    }
     return 0;
 }
