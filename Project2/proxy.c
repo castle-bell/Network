@@ -261,31 +261,16 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
         return 0;
     }
     return -1;
+}
 
-    // /* 2번째 / 찾아서 host name 찾기 */
-    // char* ptr = strchr(URL, '/');
-    // ptr = strchr(ptr+1,'/');
-    // /* host name start point */
-    // ptr = ptr+1;
-    // char *start_point = ptr;
-    // char *end_point = strchr(ptr,':');
-    // *host = (char*)calloc((end_point-start_point)+1,sizeof(char));
-    // strncpy(*host,start_point,end_point-start_point);
-    // (*host)[end_point-start_point] = '\0';
-
-    // /* Port start point */
-    // start_point = end_point+1;
-    // end_point = strchr(start_point, '/');
-    // *port = (char*)calloc((end_point-start_point)+1,sizeof(char));
-    // strncpy(*port,start_point,end_point-start_point);
-    // (*port)[end_point-start_point] = '\0';
-
-    // /* Path start point */
-    // start_point = end_point;
-    // end_point = strchr(start_point, '\0');
-    // *path = (char*)calloc((end_point-start_point)+1,sizeof(char));
-    // strncpy(*path,start_point,end_point-start_point);
-    // (*path)[end_point-start_point] = '\0';
+int check_URL(char *host, char* header_host)
+{
+    /* check valid host */
+    if(gethostbyname(host) == NULL)
+        return -1;
+    if(strcmp(host,header_host) != 0)
+        return -1;
+    return 0;
 }
 
 int connect_server(char *host, char *port)
@@ -330,38 +315,66 @@ char* str_concat(char* a, char *b)
     return concat;
 }
 
-char* make_HTTP_message(char **message)
+char* make_HTTP_message(char **message, char* URL)
 {
     int l1 = strlen(message[0]);
-    int l2 = strlen(message[1]);
+    int l2 = strlen(URL);
     int l3 = strlen(message[2]);
     char* total_message = (char*)malloc(l1+l2+l3+5);
+    printf("length:%d\n",l3);
     strncpy(total_message,message[0],l1);
     total_message[l1] = ' ';
-    strncpy(&total_message[l1+1],message[1],l2);
+    strncpy(&total_message[l1+1],URL,l2);
     total_message[l1+l2+1] = ' ';
     strncpy(&total_message[l1+l2+2],message[2],l3);
     total_message[l1+l2+l3+2] = '\r';
     total_message[l1+l2+l3+3] = '\n';
     total_message[l1+l2+l3+4] = '\0';
     return total_message;
-
 }
 
-void send_HTTP(int fd, char* message)
+char* make_entire_URL(char* host, char* port, char* path)
+{
+    int length = strlen(host) + strlen(port) + strlen(path) + 9;
+    int ptr = 0;
+    char *URL = (char*)malloc(length);
+    
+    strncpy(URL,"http://", 7);
+    ptr = 7;
+    strncpy(&URL[ptr],host,strlen(host));
+    ptr += strlen(host);
+    strncpy(&URL[ptr],":",1);
+    ptr += 1;
+    strncpy(&URL[ptr],port,strlen(port));
+    ptr += strlen(port);
+    strncpy(&URL[ptr],path,strlen(path));
+    ptr += strlen(path);
+    URL[ptr] = '\0';
+    return URL;
+}
+
+void Bad_request(int fd)
+{
+    char *bad ="HTTP/1.0 400 Bad Request";
+    send(fd,bad,strlen(bad),0);
+    send(fd,"\r\n\r\n",4,0);
+    close(fd);
+}
+
+void send_HTTP(int fd, char* message, char** header_line)
 {
     /* host 바꿔야 되는데 안 바꿈 안바꿔도 될거 같기는 함*/
     int sd = send(fd,message,strlen(message),0);
+    send(fd,header_line[0],strlen(header_line[0]),0);
+    send(fd,header_line[1],strlen(header_line[1]),0);
     send(fd,"\r\n",2,0);
-    printf("sd: %d\n",sd);
+    send(fd,"\r\n",2,0);
 }
 
 char* recv_HTTP(int fd)
 {
-    printf("In Recv function\n");
     char* get = (char*)calloc(10000,sizeof(char));
     int rcv = recv(fd,get,10000,0);
-    printf("Rcv: %d\n",rcv);
     return get;
 }
 
@@ -419,40 +432,38 @@ void test1(int fd)
     if(port == NULL)
         port = "80";
 
-    printf("host: %s\n",host);
-    printf("port: %s\n",port);
-    printf("host len: %ld\n",strlen(host));
-    printf("port len: %ld\n",strlen(port));
+    /* check validity of URL */
+    int validity;
+    validity = check_URL(host,header_line[1]);
+    if(validity == -1)
+        printf("URL error!\n");
 
-    if(path != NULL)
-    {
+    // /* 받은 URL을 이용해서 server 연결 */
+    int server_fd = connect_server(host,port);
+    /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
 
-        printf("path: %s\n",path);
-        printf("path len: %ld\n",strlen(path));
-    }
+    /* Make entire URL */
+    char *URL = make_entire_URL(host,port,path);
+    /* HTTP_message 만들기 (\r\n붙여서) */
+    char * send_message = make_HTTP_message(request_line, URL);
+    send_HTTP(server_fd,send_message, header_line);
+    char * get_message;
+    get_message = recv_HTTP(server_fd);
+    printf("%s\n",get_message);
 
-    /* 받은 URL을 이용해서 server 연결 */
-    // int server_fd = connect_server(host,port);
-    // /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
-    // /* HTTP_message 만들기 (\r\n붙여서) */
-    // char * send_message = make_HTTP_message(message);
-    // send_HTTP(server_fd,send_message);
-    // char * get_message;
-    // get_message = recv_HTTP(server_fd);
-    // printf("%s\n",get_message);
+    /* Send received message to client */
+    send(fd, get_message, strlen(get_message), 0);
 
-    // /* Send received message to client */
-    // send(fd, get_message, strlen(get_message), 0);
-
-    // printf("%%%%Finish%%%%\n");
-    // free(buffer);
+    printf("%%%%Finish%%%%\n");
+    free(buffer);
+    /* free 할거 다 찾아서 제대로 free 하기 */
     /* server 로부터 받은 정보 출력 */
 }
 
 int main(int argc, char* argv[])
 {
 
-    char *port = argv[1];
+    char *get_port = argv[1];
 
     char hostbuffer[256];
     int hostname;
@@ -467,7 +478,7 @@ int main(int argc, char* argv[])
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     
-    if((status = getaddrinfo(hostbuffer,port,&hints,&res)) != 0)
+    if((status = getaddrinfo(hostbuffer,get_port,&hints,&res)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         return 0;
@@ -492,9 +503,6 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    printf("host name:%s\n",hostbuffer);
-    printf("Port number:%s\n",port);
-
     /* IP address */
     struct sockaddr_storage client_addr;
     socklen_t addr_size;
@@ -503,16 +511,78 @@ int main(int argc, char* argv[])
 
     int new_fd = accept(fd,(struct sockaddr *)&client_addr,&addr_size);
 
-    /* 연결 완료 */
-    /* client 로부터 요청 듣기 */
-    
+    char* buffer = read_request(new_fd);
 
-    /* 해당 서버로 요청 보내기 */
-    test1(new_fd);
-    
-    /* 해당 서버로 요청 보내기 */
+    /* Parsing the request to request line, header field */
+    char **divide_request = request_parsing(buffer);
+    if(divide_request == NULL)
+    {
+        Bad_request(new_fd);
+        return 0;
+    }
+
+    char **request_line;
+    int number_r = 0;
+    request_line = message_parsing(divide_request[0], &number_r);
+
+    char **header_line;
+    int number_h = 0;
+    header_line = message_parsing(divide_request[1], &number_h);
+
+
+    if((number_r != 3) || (number_h != 2))
+    {
+        Bad_request(new_fd);
+        return 0;
+    }
+
+
+    if(check_request_line(request_line) == -1)
+    {
+        Bad_request(new_fd);
+        return 0;
+    }
+    if(check_header_field(header_line) == -1)
+    {
+        Bad_request(new_fd);
+        return 0;
+    }
+
+    char* host;
+    char* port;
+    char* path;
+    char* url = request_line[1];
+    int valid = URL_parsing(url,header_line,&host,&port,&path);
+    if(port == NULL)
+        port = "80";
+
+    /* check validity of URL */
+    int validity;
+    validity = check_URL(host,header_line[1]);
+    if(validity == -1)
+    {
+        Bad_request(new_fd);
+        return 0;
+    }
+
+    // /* 받은 URL을 이용해서 server 연결 */
+    int server_fd = connect_server(host,port);
+    /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
+
+    /* Make entire URL */
+    char *URL = make_entire_URL(host,port,path);
+    /* HTTP_message 만들기 (\r\n붙여서) */
+    char * send_message = make_HTTP_message(request_line, URL);
+    send_HTTP(server_fd,send_message, header_line);
+    char * get_message;
+    get_message = recv_HTTP(server_fd);
+
+    /* Send received message to client */
+    send(fd, get_message, strlen(get_message), 0);
+
+    free(buffer);
+
     close(fd);
     /* message랑 위치 정한거 free 하기 */
-
     return 0;
 }
