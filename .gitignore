@@ -1,1 +1,7 @@
 *.txt:Zone.Identifier
+
+proxy_tester/
+
+*.o
+
+proxy.js
