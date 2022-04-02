@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <errno.h>
 #include <assert.h>
+#include <poll.h>
 
 int max_str(char* a, char* b)
 {
@@ -32,6 +33,15 @@ char* find_end_point(char* start_point)
     if(s == NULL)
         return p;
     return (p < s) ? p : s;
+}
+
+char* alloc_and_copy(char *message)
+{
+    int length = strlen(message);
+    char* copy = (char*)malloc(length+1);
+    strncpy(copy,message,length);
+    copy[length] = '\0';
+    return copy;
 }
 
 /* Receive all messages length n we want */
@@ -166,9 +176,9 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
     char* slash = strchr(URL, '/');
     if(slash == &URL[0])
     {
-        *host = header_line[1];
-        *port = NULL;
-        *path = URL;
+        *host = alloc_and_copy(header_line[1]);
+        *port = alloc_and_copy("80");
+        *path = alloc_and_copy(URL);
         return 1;
     }
     char* host_name = &URL[0];
@@ -186,8 +196,8 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
     /* a;lkdj:// 로 끝나는 경우 */
     if(*host_name == '\0')
     {
-        *host = header_line[1];
-        *port = NULL;
+        *host = alloc_and_copy(header_line[1]);
+        *port = alloc_and_copy("80");
         *path = NULL;
         return 1;
     }
@@ -205,7 +215,7 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
     if(end_point == NULL)
     {
         *host = url_host;
-        *port = NULL;
+        *port = alloc_and_copy("80");
         *path = NULL;
         return 0;
     }
@@ -220,7 +230,7 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
         url_path[end_point-start_point] = '\0';
         
         *host = url_host;
-        *port = NULL;
+        *port = alloc_and_copy("80");
         *path = url_path;
         return 0;
     }
@@ -371,6 +381,72 @@ void send_HTTP(int fd, char* message, char** header_line)
     send(fd,"\r\n",2,0);
 }
 
+char** get_black_list(int* list_number)
+{
+    /* check the stdin that is ready to read */
+    /* make stding non blocked */
+    struct pollfd fds[1];
+    fds[0].fd = STDIN_FILENO;
+    fds[0].events = POLLIN;
+
+    int ready = poll(fds,1,0);
+
+    /* stdin에 black_list가 들어오지 않았을 때 */
+    if(ready == 0)
+        return NULL;
+    
+    if(ready == -1)
+    {
+        fprintf(stderr,"Poll Error occureed\n");
+        return NULL;
+    }
+
+    /* stdin에 black_list가 들어왔을 때 */
+    char ** black_list = (char**)calloc(1000,sizeof(char*));
+    int capacity = 1000;
+    char* copy;
+
+    while(1)
+    {
+        char* black = (char*)calloc(100,sizeof(char));
+        copy = black;
+        black = fgets(black,100,stdin);
+        if(black == NULL)
+        {
+            free(copy);
+            break;
+        }
+        /* remove white space character */
+        int len = strlen(black);
+        if((black[len-1] == '\r') || (black[len-1] == '\n'))
+            black[len-1] = '\0';
+        if((black[len-2] == '\r') || (black[len-2] == '\n'))
+            black[len-2] = '\0'; 
+        black_list[*list_number] = black;
+        *list_number += 1;
+    }
+    return black_list;
+}
+
+void check_blacklist(char** black_list, int number, char** host, char** port, char** path)
+{
+    for(int i=0;i<number;i++)
+    {
+        if(strcmp(*host,&black_list[i][7]) == 0)
+        {
+            printf("hererere?\n");
+            free((*host));
+            free((*port));
+            free((*path));
+            *host = "warning.or.kr";
+            *port = "80";
+            *path = "/";
+            return;
+        }
+    }
+    return;
+}
+
 char* recv_HTTP(int fd)
 {
     char* get = (char*)calloc(10000,sizeof(char));
@@ -378,7 +454,7 @@ char* recv_HTTP(int fd)
     return get;
 }
 
-void test1(int fd)
+void test1(int fd, char ** black_list, int list_length)
 {
     printf("@@@@Test 1@@@@\n");
 
@@ -438,11 +514,20 @@ void test1(int fd)
     if(validity == -1)
         printf("URL error!\n");
 
+
+    /* check black list and change the host */
+    /* 여기 path가 NULL인 경우, port가 "80"인 경우도 들어가면 바로 에러 뜰듯 */
+    check_blacklist(black_list,list_length,&host,&port,&path);
+    printf("Host: %s\n",host);
+    printf("Port: %s\n",port);
+    printf("Path: %s\n",path);
+
     // /* 받은 URL을 이용해서 server 연결 */
     int server_fd = connect_server(host,port);
     /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
 
     /* Make entire URL */
+    /* path가 NULL인 경우는 아직 안 한거 같은데 잘 동작은 함 */
     char *URL = make_entire_URL(host,port,path);
     /* HTTP_message 만들기 (\r\n붙여서) */
     char * send_message = make_HTTP_message(request_line, URL);
@@ -460,10 +545,31 @@ void test1(int fd)
     /* server 로부터 받은 정보 출력 */
 }
 
+char** test2(int * number)
+{
+    /* get black_list */
+    char ** black_list;
+    int list_number = 0;
+    black_list = get_black_list(&list_number);
+    if(black_list == NULL)
+        printf("black_list is empty\n");
+    else
+        printf("Black list: %s\n",black_list[0]);
+    printf("strlen: %ld\n",strlen(black_list[0]));
+    *number = list_number;
+    return black_list;
+
+}
+
 int main(int argc, char* argv[])
 {
 
     char *get_port = argv[1];
+    char ** black_list;
+    int list_number = 0;
+
+    /* Get black list */
+    black_list = get_black_list(&list_number);
 
     char hostbuffer[256];
     int hostname;
@@ -511,6 +617,7 @@ int main(int argc, char* argv[])
 
     int new_fd = accept(fd,(struct sockaddr *)&client_addr,&addr_size);
 
+    /* Read request from client */
     char* buffer = read_request(new_fd);
 
     /* Parsing the request to request line, header field */
@@ -553,8 +660,6 @@ int main(int argc, char* argv[])
     char* path;
     char* url = request_line[1];
     int valid = URL_parsing(url,header_line,&host,&port,&path);
-    if(port == NULL)
-        port = "80";
 
     /* check validity of URL */
     int validity;
