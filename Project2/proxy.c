@@ -45,6 +45,21 @@ char* alloc_and_copy(char *message)
 }
 
 /* Receive all messages length n we want */
+int send_all(int fd, char* buffer, size_t length)
+{
+    int sending = 0;
+    while(length>0)
+    {
+        int sent = send(fd,buffer,length,0);
+        if(sent <= 0) return -1;
+        buffer += sent;
+        length -= sent;
+        sending += sent;
+    }
+    return sending;
+}
+
+/* Receive all messages length n we want */
 int receive_all(int fd, char* buffer, size_t length)
 {
     int receive = 0;
@@ -135,7 +150,6 @@ char **message_parsing(char *message, int* number)
         i++;
     }
     *number = i;
-    printf("Number of element: %d\n",i);
     return  parsed;
 }
 
@@ -198,7 +212,7 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
     {
         *host = alloc_and_copy(header_line[1]);
         *port = alloc_and_copy("80");
-        *path = NULL;
+        *path = alloc_and_copy("");
         return 1;
     }
 
@@ -212,11 +226,11 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
     url_host[end_point-host_name] = '\0';
 
     /* Port 도 생략되고 / 도 없는 경우(path가 없는경우) */
-    if(end_point == NULL)
+    if(*end_point == '\0')
     {
         *host = url_host;
         *port = alloc_and_copy("80");
-        *path = NULL;
+        *path = alloc_and_copy("");
         return 0;
     }
 
@@ -249,7 +263,7 @@ int URL_parsing(char* URL, char **header_line, char **host, char **port, char **
 
             *host = url_host;
             *port = url_port;
-            *path = NULL;
+            *path = alloc_and_copy("");
         }
         else
         {
@@ -331,7 +345,6 @@ char* make_HTTP_message(char **message, char* URL)
     int l2 = strlen(URL);
     int l3 = strlen(message[2]);
     char* total_message = (char*)malloc(l1+l2+l3+5);
-    printf("length:%d\n",l3);
     strncpy(total_message,message[0],l1);
     total_message[l1] = ' ';
     strncpy(&total_message[l1+1],URL,l2);
@@ -376,6 +389,7 @@ void send_HTTP(int fd, char* message, char** header_line)
     /* host 바꿔야 되는데 안 바꿈 안바꿔도 될거 같기는 함*/
     int sd = send(fd,message,strlen(message),0);
     send(fd,header_line[0],strlen(header_line[0]),0);
+    send(fd," ",strlen(" "),0);
     send(fd,header_line[1],strlen(header_line[1]),0);
     send(fd,"\r\n",2,0);
     send(fd,"\r\n",2,0);
@@ -434,7 +448,6 @@ void check_blacklist(char** black_list, int number, char** host, char** port, ch
     {
         if(strcmp(*host,&black_list[i][7]) == 0)
         {
-            printf("hererere?\n");
             free((*host));
             free((*port));
             free((*path));
@@ -447,118 +460,25 @@ void check_blacklist(char** black_list, int number, char** host, char** port, ch
     return;
 }
 
-char* recv_HTTP(int fd)
+char* recv_HTTP(int fd, int *msg_length)
 {
-    char* get = (char*)calloc(10000,sizeof(char));
-    int rcv = recv(fd,get,10000,0);
+    int rcv = 1;
+    int length = 0;
+    int size = 10000;
+    char* get = (char*)calloc(size,sizeof(char));
+    while(rcv > 0)
+    {
+        if((size-length) < 1000)
+        {
+            /* Handle error case later */
+            get = realloc(get, size+2000);
+            size += 2000;
+        }
+        rcv = recv(fd,&get[length],size-length,0);
+        length += rcv;
+    }
+    *msg_length = length;
     return get;
-}
-
-void test1(int fd, char ** black_list, int list_length)
-{
-    printf("@@@@Test 1@@@@\n");
-
-    /* Read until the Only CRLF comes */
-    char* buffer = read_request(fd);
-
-    /* Parsing the request to request line, header field */
-    char **divide_request = request_parsing(buffer);
-    if(divide_request == NULL)
-        printf("Invalid request!!!!!\n");
-
-    char **request_line;
-    int number_r = 0;
-    request_line = message_parsing(divide_request[0], &number_r);
-
-    char **header_line;
-    int number_h = 0;
-    header_line = message_parsing(divide_request[1], &number_h);
-
-    /* request_line 숫자와 header_line component 숫자가 안맞으면 invalid */
-    if((number_r != 3) || (number_h != 2))
-        printf("Invalid request!\n");
-
-    /* 연결된 client 정보 ip, port number 출력 */
-    /* client 로부터 받은 정보 출력 */
-    printf("Get message: %s\n",buffer);
-
-    /* client 로부터 받은 정보가 매우 많을때 나누어서 출력(아직 테스트 안됨) */
-    // assert(strcmp(message[0],"GET") == 0);
-    // assert(strcmp(message[1],"/nmsl/ee323.txt") == 0);
-    // assert(strcmp(message[2],"HTTP/1.0") == 0);
-
-    /* check the error */
-    /* 지금은 다 정확한 숫자 만큼 있다고 가정 */
-    if(check_request_line(request_line) == -1)
-        printf("error case\n");
-    if(check_header_field(header_line) == -1)
-        printf("Header_field error\n");
-
-    /* Error 404 bad request 보내는 거 */
-    
-    /* URL을 Parsing host 다 있고 포트 있고, 프로토콜있고 라고 생각*/
-    /* 이제 URL을 각 상황에 맞게 분리 및 에러 체크 */
-    /* scheme이 이상한 경우만 제외하고 모든 경우 체크 */
-    /* www.google.com:/file/help 처럼 :/ 경우도 제외 */
-    char* host;
-    char* port;
-    char* path;
-    char* url = request_line[1];
-    int valid = URL_parsing(url,header_line,&host,&port,&path);
-    if(port == NULL)
-        port = "80";
-
-    /* check validity of URL */
-    int validity;
-    validity = check_URL(host,header_line[1]);
-    if(validity == -1)
-        printf("URL error!\n");
-
-
-    /* check black list and change the host */
-    /* 여기 path가 NULL인 경우, port가 "80"인 경우도 들어가면 바로 에러 뜰듯 */
-    check_blacklist(black_list,list_length,&host,&port,&path);
-    printf("Host: %s\n",host);
-    printf("Port: %s\n",port);
-    printf("Path: %s\n",path);
-
-    // /* 받은 URL을 이용해서 server 연결 */
-    int server_fd = connect_server(host,port);
-    /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
-
-    /* Make entire URL */
-    /* path가 NULL인 경우는 아직 안 한거 같은데 잘 동작은 함 */
-    char *URL = make_entire_URL(host,port,path);
-    /* HTTP_message 만들기 (\r\n붙여서) */
-    char * send_message = make_HTTP_message(request_line, URL);
-    send_HTTP(server_fd,send_message, header_line);
-    char * get_message;
-    get_message = recv_HTTP(server_fd);
-    printf("%s\n",get_message);
-
-    /* Send received message to client */
-    send(fd, get_message, strlen(get_message), 0);
-
-    printf("%%%%Finish%%%%\n");
-    free(buffer);
-    /* free 할거 다 찾아서 제대로 free 하기 */
-    /* server 로부터 받은 정보 출력 */
-}
-
-char** test2(int * number)
-{
-    /* get black_list */
-    char ** black_list;
-    int list_number = 0;
-    black_list = get_black_list(&list_number);
-    if(black_list == NULL)
-        printf("black_list is empty\n");
-    else
-        printf("Black list: %s\n",black_list[0]);
-    printf("strlen: %ld\n",strlen(black_list[0]));
-    *number = list_number;
-    return black_list;
-
 }
 
 int main(int argc, char* argv[])
@@ -570,12 +490,6 @@ int main(int argc, char* argv[])
 
     /* Get black list */
     black_list = get_black_list(&list_number);
-
-    char hostbuffer[256];
-    int hostname;
-  
-    // To retrieve hostname
-    hostname = gethostname(hostbuffer, sizeof(hostbuffer));
   
     /* Cite the beej's */
     struct addrinfo hints, *res, *p;
@@ -583,8 +497,9 @@ int main(int argc, char* argv[])
     memset(&hints, 0 ,sizeof hints);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
     
-    if((status = getaddrinfo(hostbuffer,get_port,&hints,&res)) != 0)
+    if((status = getaddrinfo(NULL,get_port,&hints,&res)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         return 0;
@@ -615,79 +530,127 @@ int main(int argc, char* argv[])
     addr_size = sizeof(client_addr);
     freeaddrinfo(res);
 
-    int new_fd = accept(fd,(struct sockaddr *)&client_addr,&addr_size);
 
-    /* Read request from client */
-    char* buffer = read_request(new_fd);
-
-    /* Parsing the request to request line, header field */
-    char **divide_request = request_parsing(buffer);
-    if(divide_request == NULL)
+    /* Multi client process */
+    pid_t pid;
+    int new_fd;
+    while(1)
     {
-        Bad_request(new_fd);
-        return 0;
+        new_fd = accept(fd,(struct sockaddr *)&client_addr,&addr_size);
+        if(new_fd == -1)
+            continue;
+        pid = fork();
+        if(pid == 0)
+            break;
+        if(pid > 0)
+            close(new_fd);
+        if(pid < 0)
+            fprintf(stderr,"Fork failed\n");
     }
 
-    char **request_line;
-    int number_r = 0;
-    request_line = message_parsing(divide_request[0], &number_r);
-
-    char **header_line;
-    int number_h = 0;
-    header_line = message_parsing(divide_request[1], &number_h);
-
-
-    if((number_r != 3) || (number_h != 2))
+    if(pid == 0)
     {
-        Bad_request(new_fd);
-        return 0;
+        /* Read request from client */
+        char* buffer = read_request(new_fd);
+
+        /* Parsing the request to request line, header field */
+        char **divide_request = request_parsing(buffer);
+        if(divide_request == NULL)
+        {
+            Bad_request(new_fd);
+            free(buffer);
+            close(new_fd);
+            exit(-1);
+        }
+
+        char **request_line;
+        int number_r = 0;
+        request_line = message_parsing(divide_request[0], &number_r);
+
+        char **header_line;
+        int number_h = 0;
+        header_line = message_parsing(divide_request[1], &number_h);
+
+
+        if((number_r != 3) || (number_h != 2))
+        {
+            Bad_request(new_fd);
+            free(buffer);
+            close(new_fd);
+            exit(-1);
+        }
+
+
+        if(check_request_line(request_line) == -1)
+        {
+            Bad_request(new_fd);
+            free(buffer);
+            close(new_fd);
+            exit(-1);
+        }
+        if(check_header_field(header_line) == -1)
+        {
+            Bad_request(new_fd);
+            free(buffer);
+            close(new_fd);
+            exit(-1);
+        }
+
+        char* host;
+        char* port;
+        char* path;
+        char* url = request_line[1];
+        URL_parsing(url,header_line,&host,&port,&path);
+
+        /* check validity of URL */
+        int validity;
+        validity = check_URL(host,header_line[1]);
+        if(validity == -1)
+        {
+            Bad_request(new_fd);
+            free(buffer);
+            free(host);
+            free(port);
+            free(path);
+            close(new_fd);
+            exit(-1);
+        }
+
+        /* check black list and change the host */
+        /* 여기 path가 NULL인 경우, port가 "80"인 경우도 들어가면 바로 에러 뜰듯 */
+        check_blacklist(black_list,list_number,&host,&port,&path);
+
+        // /* 받은 URL을 이용해서 server 연결 */
+        int server_fd = connect_server(host,port);
+        /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
+
+        /* Make entire URL */
+        char *URL = make_entire_URL(host,port,path);
+
+        /* HTTP_message 만들기 (\r\n붙여서) */
+        char * send_message = make_HTTP_message(request_line, URL);
+        send_HTTP(server_fd,send_message, header_line);
+
+        int length;
+        char * get_message;
+        get_message = recv_HTTP(server_fd, &length);
+
+        close(server_fd);
+
+        /* Send received message to client */
+        int n = send_all(new_fd, get_message, length);
+        // send(new_fd,'\0',1,0);
+
+        /* Free all dynamically allocated memory */
+        free(buffer);
+        free(host);
+        free(port);
+        free(path);
+        free(get_message);
+        free(URL);
+        close(new_fd);
+
+        /* message랑 위치 정한거 free 하기 */
     }
-
-
-    if(check_request_line(request_line) == -1)
-    {
-        Bad_request(new_fd);
-        return 0;
-    }
-    if(check_header_field(header_line) == -1)
-    {
-        Bad_request(new_fd);
-        return 0;
-    }
-
-    char* host;
-    char* port;
-    char* path;
-    char* url = request_line[1];
-    int valid = URL_parsing(url,header_line,&host,&port,&path);
-
-    /* check validity of URL */
-    int validity;
-    validity = check_URL(host,header_line[1]);
-    if(validity == -1)
-    {
-        Bad_request(new_fd);
-        return 0;
-    }
-
-    // /* 받은 URL을 이용해서 server 연결 */
-    int server_fd = connect_server(host,port);
-    /* server에 넣기 (이거 할 때 프록시 서버가 보여야되는거 주의)*/
-
-    /* Make entire URL */
-    char *URL = make_entire_URL(host,port,path);
-    /* HTTP_message 만들기 (\r\n붙여서) */
-    char * send_message = make_HTTP_message(request_line, URL);
-    send_HTTP(server_fd,send_message, header_line);
-    char * get_message;
-    get_message = recv_HTTP(server_fd);
-
-    /* Send received message to client */
-    send(fd, get_message, strlen(get_message), 0);
-
-    free(buffer);
-
-    close(fd);
-    /* message랑 위치 정한거 free 하기 */
     return 0;
 }
