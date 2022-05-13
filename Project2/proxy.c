@@ -74,12 +74,30 @@ int receive_all(int fd, char* buffer, size_t length)
     return receive;
 }
 
+bool check_finish(char *buffer, int size)
+{
+    char * ptr;
+    int idx;
+    /* First find \r\n\r\n(after \r\n\r\n, all body entity) */
+    int length = size;
+    if(length < 4)
+        return false;
+    
+    for(idx = 3; idx < length; idx++)
+    {
+        if((buffer[idx-3] == '\r') && (buffer[idx-2] == '\n')
+        && (buffer[idx-1] == '\r') && (buffer[idx] == '\n'))
+            return true;
+    }
+    return false;
+}
 
 char *read_request(int fd)
 {
     int read = 0;
     int capacity = 100;
     char *buffer = (char *)calloc(100,sizeof(char));
+
     while(1)
     {
         if(capacity - read <= 50)
@@ -88,39 +106,65 @@ char *read_request(int fd)
             capacity += 50;
         }
         read += recv(fd,&buffer[read],40,0);
-        if(read >= 4)
-        {
-            /* last element */
-            bool a1 = (buffer[read-1] == '\n');
-            bool a2 = (buffer[read-2] == '\r');
-            bool a3 = (buffer[read-3] == '\n');
-            bool a4 = (buffer[read-4] == '\r');
-            if(a1&&a2&&a3&&a4)
-            {
-                buffer[read-1] = '\0';
-                buffer[read-2] = '\0';
-                return buffer;
-            }
-        }
+        if(check_finish(buffer, read) == 1)
+            break;
     }
+    buffer[read] = '\0';
+
+    /* Set the fd block */
+    // stat = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+    return buffer;
 }
 
-char **request_parsing(char *request_complex)
+
+/* Remove body and check least invalidity */
+char* remove_body(char *buffer)
 {
-    char ** request = (char**)calloc(5,sizeof(char*));
+    char * ptr;
+    int idx;
+    /* First find \r\n\r\n(after \r\n\r\n, all body entity) */
+    int length = strlen(buffer);
+    if(length < 4)
+        return NULL;
+    
+    for(idx = 3; idx < length; idx++)
+    {
+        if((buffer[idx-3] == '\r') && (buffer[idx-2] == '\n')
+        && (buffer[idx-1] == '\r') && (buffer[idx] == '\n'))
+            break;
+    }
+    
+    /* If no \r\n\r\n, return NULL */
+    if(idx == length)
+    {
+        free(buffer);
+        return NULL;
+    }
+
+    /* \r\n\r\n exists, copy the string until \r\n of \r\n\r\n */
+    char * removed = (char *)malloc(idx);
+    strncpy(removed,buffer,idx-1);
+    removed[idx] = '\0';
+    free(buffer);
+    return removed;
+}
+
+char **request_parsing(char *request_complex, int* header_loc)
+{
+    char ** request = (char**)calloc(15,sizeof(char*));
     char * copy = request_complex;
 
     copy = strtok(copy,"\n");
     int i = 0;
-    while((copy != NULL) && (i <5))
+    while((copy != NULL) && (i <10))
     {
         request[i] = copy;
         copy = strtok(NULL,"\n");
         i++;
     }
 
-    /* 이때 만약 request 갯수가 2개가 아니면 invalid request */
-    if(i != 2)
+    /* 이때 만약 request 갯수가 2개 미만이면 invalid request */
+    if(i == 1 || i == 0)
     {
         return NULL;
     }
@@ -129,8 +173,24 @@ char **request_parsing(char *request_complex)
     for(int j = 0;j<i;j++)
     {
         int length = strlen(request[j]);
+        if(request[j][length-1] != '\r')
+            return NULL;
         request[j][length-1] = '\0';
     }
+
+    /* Host header를 찾아서 그 array 열을 header_loc에 반환 */
+    for(int j = 1;j<i;j++)
+    {
+        if(strncmp(request[j],"Host: ",6) == 0)
+        {
+            *header_loc = j;
+            break;
+        }
+    }
+
+    /* No Host header line */
+    if(*header_loc == -1)
+        return NULL;
 
     return request;
 }
@@ -185,7 +245,6 @@ int check_header_field(char *header_field[])
  parsed URL through parameter, it consists of host, port, path in order */
 int URL_parsing(char* URL, char **header_line, char **host, char **port, char **path)
 {
-    printf("URL: %s\n",URL);
     /* 첫번째 / 찾아서 그 /의 위치가 0이면 hostname 생략 후 path 부터 시작 */
     char* slash = strchr(URL, '/');
     if(slash == &URL[0])
@@ -366,10 +425,13 @@ char* make_entire_URL(char* host, char* port, char* path)
     ptr = 7;
     strncpy(&URL[ptr],host,strlen(host));
     ptr += strlen(host);
-    strncpy(&URL[ptr],":",1);
-    ptr += 1;
-    strncpy(&URL[ptr],port,strlen(port));
-    ptr += strlen(port);
+    if(strcmp(port,"80") != 0)
+    {
+        strncpy(&URL[ptr],":",1);
+        ptr += 1;
+        strncpy(&URL[ptr],port,strlen(port));
+        ptr += strlen(port);
+    }
     strncpy(&URL[ptr],path,strlen(path));
     ptr += strlen(path);
     URL[ptr] = '\0';
@@ -450,10 +512,11 @@ void check_blacklist(char** black_list, int number, char** host, char** port, ch
         {
             free((*host));
             free((*port));
-            free((*path));
-            *host = "warning.or.kr";
-            *port = "80";
-            *path = "/";
+            if(*path != NULL)
+                free((*path));
+            *host = alloc_and_copy("warning.or.kr");
+            *port = alloc_and_copy("80");
+            *path = alloc_and_copy("/");
             return;
         }
     }
@@ -512,6 +575,9 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    int optvalue = 1;
+    setsockopt(fd, SOL_SOCKET,SO_REUSEADDR, &optvalue, sizeof(optvalue));
+
     if(bind(fd, res->ai_addr, res->ai_addrlen) == -1)
     {
         fprintf(stderr, "Server bind failed\n");
@@ -551,10 +617,14 @@ int main(int argc, char* argv[])
     if(pid == 0)
     {
         /* Read request from client */
-        char* buffer = read_request(new_fd);
+        char* buf = read_request(new_fd);
+
+        /* Check this request contains body entity remove it, if invalid return NULL */
+        char* buffer = remove_body(buf);
 
         /* Parsing the request to request line, header field */
-        char **divide_request = request_parsing(buffer);
+        int header_loc = -1;
+        char **divide_request = request_parsing(buffer,&header_loc);
         if(divide_request == NULL)
         {
             Bad_request(new_fd);
@@ -569,7 +639,7 @@ int main(int argc, char* argv[])
 
         char **header_line;
         int number_h = 0;
-        header_line = message_parsing(divide_request[1], &number_h);
+        header_line = message_parsing(divide_request[header_loc], &number_h);
 
 
         if((number_r != 3) || (number_h != 2))

@@ -191,8 +191,9 @@ int main(int argc, char* argv[])
     memset(&hints, 0 ,sizeof hints);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
     
-    if((status = getaddrinfo(hostbuffer,port,&hints,&res)) != 0)
+    if((status = getaddrinfo(NULL,port,&hints,&res)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         return 0;
@@ -211,7 +212,7 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    if(listen(fd, 10 == -1))
+    if(listen(fd, 10) == -1)
     {
         fprintf(stderr, "listen failed\n");
         return 0;
