@@ -430,10 +430,23 @@ static void FSM_four_way_hs(mysocket_t sd, context_t *ctx)
             case CSTATE_FIN_WAIT_1:
                 /* Get the ACK packet */
                 recv = stcp_network_recv(sd,&recv_header,sizeof(recv_header));
-                if(recv_header.th_flags != TH_ACK)
+                if(recv_header.th_flags != TH_ACK && recv_header.th_flags != (TH_FIN | TH_ACK))
                     printf("Undefined behavior\n");
-                set_ack_num(ctx, recv);
-                ctx->connection_state = CSTATE_FIN_WAIT_2;
+                if(recv_header.th_flags == TH_ACK)
+                {
+                    set_ack_num(ctx, recv);
+                    ctx->connection_state = CSTATE_FIN_WAIT_2;
+                }
+                else /* FIN ACK(simultaneous close) */
+                {
+                    set_ack_num(ctx, recv+1);
+                    header.th_seq = get_seq_num(ctx);
+                    header.th_ack = get_ack_num(ctx);
+                    header.th_flags = TH_ACK;
+                    header.th_win = htons(3072);
+                    set_seq_num(ctx, stcp_network_send(sd, &header, sizeof(header), NULL));
+                    ctx->connection_state = CSTATE_CLOSING;
+                }
                 break;
 
             case CSTATE_FIN_WAIT_2:
@@ -470,6 +483,15 @@ static void FSM_four_way_hs(mysocket_t sd, context_t *ctx)
                 ctx->connection_state = CSTATE_CLOSED;
                 ctx->done = 1;
                 break;
+
+            case CSTATE_CLOSING:
+                recv = stcp_network_recv(sd,&recv_header,sizeof(recv_header));
+                if(recv_header.th_flags != TH_ACK)
+                    printf("Undefined behavior\n");
+                set_ack_num(ctx, recv);
+                ctx->connection_state = CSTATE_TIME_WAIT;
+                break;
+
         }
     }
 
