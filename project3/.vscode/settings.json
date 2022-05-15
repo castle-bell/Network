@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "pthread.h": "c",
-        "network.h": "c"
+        "network.h": "c",
+        "stcp_api.h": "c"
     }
 }

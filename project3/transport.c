@@ -86,8 +86,6 @@ void transport_init(mysocket_t sd, bool_t is_active)
     else
         ctx->connection_state = CSTATE_LISTEN;
 
-    uint32_t recv = 0;
-
     /* Implement three way handshaking */
     FSM_three_way_hs(sd, ctx);
 
@@ -162,8 +160,6 @@ static void control_loop(mysocket_t sd, context_t *ctx)
 {
     assert(ctx);
     assert(ctx->connection_state == CSTATE_ESTABLISHED);
-
-    printf("In control loop\n");
 
     /* Use prev_sequence_num element */
     ctx->prev_sequence_num = ctx->current_sequence_num;
@@ -260,13 +256,12 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                 send_header.th_ack = get_ack_num(ctx);
                 send_header.th_flags = TH_ACK;
                 send_header.th_win = htons(3072);
-                set_seq_num(ctx, stcp_network_send(sd, &send_header, sizeof(send_header)));
+                set_seq_num(ctx, stcp_network_send(sd, &send_header, sizeof(send_header), NULL));
 
                 /* Send payload to application */
                 char payload[recv - sizeof(STCPHeader)];
                 copy(recv_buffer+sizeof(STCPHeader), payload, recv-sizeof(STCPHeader));
                 stcp_app_send(app, payload, sizeof(payload));
-                printf("come here\n");
             }
 
             else
@@ -326,7 +321,7 @@ static char *make_packet(context_t *ctx, char *data, int start, int size)
     header.th_ack = get_ack_num(ctx); /* Useless, but initialize */
     header.th_flags = TH_ACK;
     header.th_win = htons(3072);
-    copy(&header,packet,sizeof(STCPHeader));
+    copy((char*)(&header),packet,sizeof(STCPHeader));
 
     /* Copy the data into packet */
     copy(data+start, packet+sizeof(STCPHeader), size);
