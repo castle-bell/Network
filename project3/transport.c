@@ -53,7 +53,6 @@ static void control_loop(mysocket_t sd, context_t *ctx);
 
 static void copy(char *src, char *dest, int size);
 static char *make_packet(context_t *ctx, char *data, int start, int size);
-static int get_packet(mysocket_t sd, char *buffer);
 static void FSM_three_way_hs(mysocket_t sd, context_t *ctx);
 static void FSM_four_way_hs(mysocket_t sd, context_t *ctx);
 
@@ -123,7 +122,7 @@ static void set_seq_num(context_t *ctx, uint32_t data_len)
     assert(ctx);
     assert(data_len >= sizeof(STCPHeader));
 
-    ctx->current_sequence_num += data_len - sizeof(STCPHeader);
+    ctx->current_sequence_num = (ctx->current_sequence_num + data_len - sizeof(STCPHeader))%(__UINT32_MAX__);
 }
 
 /* Set acknowledge number of ctx */
@@ -132,7 +131,7 @@ static void set_ack_num(context_t *ctx, uint32_t data_len)
     assert(ctx);
     assert(data_len >= sizeof(STCPHeader));
 
-    ctx->current_acknowledge_num += data_len - sizeof(STCPHeader);
+    ctx->current_acknowledge_num = (ctx->current_acknowledge_num + data_len - sizeof(STCPHeader))%(__UINT32_MAX__);
 }
 
 /* Get sequence number for an STCP connection in Network endian */
@@ -217,7 +216,6 @@ static void control_loop(mysocket_t sd, context_t *ctx)
                1) Receive FINACK packet
                2) Receive data packet
             */
-        //    recv = get_packet(sd, &recv_buffer);
            recv = stcp_network_recv(sd,recv_buffer,sizeof(recv_buffer));
            copy(recv_buffer, (char *)&recv_header, sizeof(STCPHeader));
 
@@ -328,13 +326,6 @@ static char *make_packet(context_t *ctx, char *data, int start, int size)
 
     return packet;
 }
-
-// static int get_packet(mysocket_t sd, char *buffer)
-// {
-
-//     recv = stcp_network_recv(sd,&recv_buffer,sizeof(recv_buffer));
-// }
-
 
 static void FSM_three_way_hs(mysocket_t sd, context_t *ctx)
 {
